@@ -1,12 +1,6 @@
 package net.ornithemc.keratin.api.task.unpick;
 
-import java.io.BufferedReader;
-import java.io.BufferedWriter;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileReader;
-import java.io.FileWriter;
-import java.io.IOException;
+import java.io.*;
 import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.Collections;
@@ -14,12 +8,13 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.regex.Matcher;
 
+import daomephsta.unpick.constantmappers.datadriven.parser.MemberKey;
+import daomephsta.unpick.constantmappers.datadriven.parser.v3.UnpickV3Reader;
+import daomephsta.unpick.constantmappers.datadriven.parser.v3.UnpickV3Writer;
 import org.gradle.api.provider.Property;
 import org.gradle.workers.WorkAction;
 import org.gradle.workers.WorkParameters;
 
-import daomephsta.unpick.constantmappers.datadriven.parser.FieldKey;
-import daomephsta.unpick.constantmappers.datadriven.parser.MethodKey;
 import daomephsta.unpick.constantmappers.datadriven.parser.v2.UnpickV2Reader;
 import daomephsta.unpick.constantmappers.datadriven.parser.v2.UnpickV2Remapper;
 import daomephsta.unpick.constantmappers.datadriven.parser.v2.UnpickV2Writer;
@@ -40,13 +35,14 @@ public interface UnpickDefinitions {
 	default void collectUnpickDefinitions(KeratinGradleExtension keratin, MinecraftVersion[] minecraftVersions, File dir, File[] files) throws Exception {
 		BufferedWriter[] writers = new BufferedWriter[minecraftVersions.length];
 
+        // TODO: do remapping from v2 to v4 somewhere here?
 		try {
 			for (int i = 0; i < minecraftVersions.length; i++) {
 				writers[i] = new BufferedWriter(new FileWriter(files[i]));
 
 				// headers from src files are skipped
 				// (we don't want headers in the middle of the file)
-				writers[i].write("v2");
+				writers[i].write("unpick v4");
 				writers[i].newLine();
 			}
 
@@ -76,88 +72,123 @@ public interface UnpickDefinitions {
 	}
 
 	private static void exportUnpickDefinitions(KeratinGradleExtension keratin, MinecraftVersion[] minecraftVersions, File file, BufferedWriter[] writers) throws Exception {
-		boolean[] acceptsLines = new boolean[minecraftVersions.length];
-		Arrays.fill(acceptsLines, true);
-
 		try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
 			String line = reader.readLine(); // skip header
 
-			while ((line = reader.readLine()) != null) {
-				if (line.isBlank()) {
-					continue; // do not export empty lines
-				}
-
-				if (line.charAt(0) == '#') {
-					// special comments define mc version ranges where
-					// the lines below them are allowed to go
-					if (line.startsWith("###")) {
-						Arrays.fill(acceptsLines, true); // accept lines by default
-
-						line = line.substring(3);
-						line = line.trim();
-
-						Matcher mcVersionRange = Patterns.OPTIONAL_MC_VERSION_RANGE.matcher(line);
-
-						if (mcVersionRange.matches()) {
-							String versionA = mcVersionRange.group(1);
-							String versionB = mcVersionRange.group(2);
-
-							MinecraftVersion minecraftVersionA = (versionA == null) ? null : keratin.getMinecraftVersion(versionA);
-							MinecraftVersion minecraftVersionB = (versionB == null) ? null : keratin.getMinecraftVersion(versionB);
-
-							for (int i = 0; i < minecraftVersions.length; i++) {
-								MinecraftVersion minecraftVersion = minecraftVersions[i];
-
-								// if neither of two versions has shared versioning
-								// a common side must exist for comparison to be possible
-								if (!minecraftVersion.hasSharedVersioning()) {
-									if (minecraftVersionA != null && !minecraftVersionA.hasSharedVersioning() && !minecraftVersion.hasCommonSide(minecraftVersionA)) {
-										acceptsLines[i] = false;
-									}
-									if (minecraftVersionB != null && !minecraftVersionB.hasSharedVersioning() && !minecraftVersion.hasCommonSide(minecraftVersionB)) {
-										acceptsLines[i] = false;
-									}
-								}
-		
-								if (acceptsLines[i]) {
-									// skip this check if one of the above already failed
-									if ((minecraftVersionA != null && minecraftVersion.compareTo(minecraftVersionA) < 0)
-										|| (minecraftVersionB != null && minecraftVersion.compareTo(minecraftVersionB) > 0)) {
-										acceptsLines[i] = false; // mc version is not contained in the version range
-									}
-								}
-							}
-						} else {
-							try {
-								MinecraftVersion version = keratin.getMinecraftVersion(line);
-
-								for (int i = 0; i < minecraftVersions.length; i++) {
-									MinecraftVersion minecraftVersion = minecraftVersions[i];
-									
-									if (minecraftVersion.compareTo(version) != 0) {
-										acceptsLines[i] = false;
-									}
-								}
-							} catch (Exception e) {
-								// ignore : this line may just be a comment?
-							}
-						}
-					}
-
-					continue; // do not export comments
-				}
-
-				for (int i = 0; i < minecraftVersions.length; i++) {
-					if (acceptsLines[i]) {
-						writers[i].write(line);
-						writers[i].newLine();
-					}
-				}
-			}
+			switch (line) {
+                case "v1", "v2": {
+                    exportV2UnpickDefinitions(reader, keratin, minecraftVersions, writers);
+                    break;
+                }
+                case "unpick v2", "unpick v4": {
+                    exportV3UnpickDefinitions(reader, keratin, minecraftVersions, writers);
+                    break;
+                }
+                case null, default: throw new RuntimeException("Unsupported unpick version: " + line + ", in file: " + file);
+            }
 		} catch (Exception e) {
 			throw new IOException("error exporting unpick definitions from " + file, e);
 		}
 	}
+
+    private static void exportV2UnpickDefinitions(BufferedReader reader, KeratinGradleExtension keratin, MinecraftVersion[] minecraftVersions, BufferedWriter[] writers) throws IOException {
+        boolean[] acceptsLines = new boolean[minecraftVersions.length];
+        Arrays.fill(acceptsLines, true);
+
+        String line;
+        while ((line = reader.readLine()) != null) {
+            if (line.isBlank()) {
+                continue; // do not export empty lines
+            }
+
+            if (line.charAt(0) == '#') {
+                // special comments define mc version ranges where
+                // the lines below them are allowed to go
+                if (line.startsWith("###")) {
+                    Arrays.fill(acceptsLines, true); // accept lines by default
+
+                    line = line.substring(3);
+                    line = line.trim();
+
+                    Matcher mcVersionRange = Patterns.OPTIONAL_MC_VERSION_RANGE.matcher(line);
+
+                    if (mcVersionRange.matches()) {
+                        String versionA = mcVersionRange.group(1);
+                        String versionB = mcVersionRange.group(2);
+
+                        MinecraftVersion minecraftVersionA = (versionA == null) ? null : keratin.getMinecraftVersion(versionA);
+                        MinecraftVersion minecraftVersionB = (versionB == null) ? null : keratin.getMinecraftVersion(versionB);
+
+                        for (int i = 0; i < minecraftVersions.length; i++) {
+                            MinecraftVersion minecraftVersion = minecraftVersions[i];
+
+                            // if neither of two versions has shared versioning
+                            // a common side must exist for comparison to be possible
+                            if (!minecraftVersion.hasSharedVersioning()) {
+                                if (minecraftVersionA != null && !minecraftVersionA.hasSharedVersioning() && !minecraftVersion.hasCommonSide(minecraftVersionA)) {
+                                    acceptsLines[i] = false;
+                                }
+                                if (minecraftVersionB != null && !minecraftVersionB.hasSharedVersioning() && !minecraftVersion.hasCommonSide(minecraftVersionB)) {
+                                    acceptsLines[i] = false;
+                                }
+                            }
+
+                            if (acceptsLines[i]) {
+                                // skip this check if one of the above already failed
+                                if ((minecraftVersionA != null && minecraftVersion.compareTo(minecraftVersionA) < 0)
+                                        || (minecraftVersionB != null && minecraftVersion.compareTo(minecraftVersionB) > 0)) {
+                                    acceptsLines[i] = false; // mc version is not contained in the version range
+                                }
+                            }
+                        }
+                    } else {
+                        try {
+                            MinecraftVersion version = keratin.getMinecraftVersion(line);
+
+                            for (int i = 0; i < minecraftVersions.length; i++) {
+                                MinecraftVersion minecraftVersion = minecraftVersions[i];
+
+                                if (minecraftVersion.compareTo(version) != 0) {
+                                    acceptsLines[i] = false;
+                                }
+                            }
+                        } catch (Exception e) {
+                            // ignore : this line may just be a comment?
+                        }
+                    }
+                }
+
+                continue; // do not export comments
+            }
+
+            for (int i = 0; i < minecraftVersions.length; i++) {
+                if (acceptsLines[i]) {
+                    writers[i].write(line);
+                    writers[i].newLine();
+                }
+            }
+        }
+    }
+
+    private static void exportV3UnpickDefinitions(BufferedReader reader, KeratinGradleExtension keratin, MinecraftVersion[] minecraftVersions, BufferedWriter[] writers) throws IOException {
+        // TODO: Proper version range support for v3 and v4
+        boolean[] acceptsLines = new boolean[minecraftVersions.length];
+        Arrays.fill(acceptsLines, true);
+
+        String line;
+        while ((line = reader.readLine()) != null) {
+            if (line.isBlank()) {
+                continue; // do not export empty lines
+            }
+
+            for (int i = 0; i < minecraftVersions.length; i++) {
+                if (acceptsLines[i]) {
+                    writers[i].write(line);
+                    writers[i].newLine();
+                }
+            }
+        }
+    }
 
 	default void unnestUnpickDefinitions(File input, File output, File nests) throws IOException {
 		_unnestUnpickDefinitions(input, output, nests);
@@ -166,11 +197,30 @@ public interface UnpickDefinitions {
 	static void _unnestUnpickDefinitions(File input, File output, File nests) throws IOException {
 		Map<String, String> mappings = MappingUtils.buildUnnestingTranslations(nests.toPath());
 
-		try (UnpickV2Reader reader = new UnpickV2Reader(new FileInputStream(input))) {
-			UnpickV2Writer writer = new UnpickV2Writer();
-			reader.accept(new UnpickV2Remapper(mappings, Collections.emptyMap(), Collections.emptyMap(), writer));
-			Files.writeString(output.toPath(), writer.getOutput());
-		}
+        Reader inputStreamReader = new InputStreamReader(new FileInputStream(input));
+        LineNumberReader lineReader = new LineNumberReader(inputStreamReader);
+        String version = lineReader.readLine();
+        inputStreamReader.reset();
+
+        switch (version) {
+            case "v1", "v2": {
+                try (UnpickV2Reader reader = new UnpickV2Reader(inputStreamReader)) {
+                    UnpickV2Writer writer = new UnpickV2Writer();
+                    reader.accept(new UnpickV2Remapper(mappings, Collections.emptyMap(), Collections.emptyMap(), writer));
+                    Files.writeString(output.toPath(), writer.getOutput());
+                }
+                break;
+            }
+            case "unpick v3", "unpick v4": {
+                try (UnpickV3Reader reader = new UnpickV3Reader(inputStreamReader)) {
+                    UnpickV3Writer writer = new UnpickV3Writer();
+                    reader.accept(new UnpickV3UnestingRemapper(mappings, writer));
+                    Files.writeString(output.toPath(), writer.getOutput());
+                }
+                break;
+            }
+            case null, default: throw new RuntimeException("Unsupported unpick version: " + version);
+        }
 	}
 
 	interface MapUnpickDefinitionsParameters extends WorkParameters {
@@ -203,8 +253,8 @@ public interface UnpickDefinitions {
 				}
 
 				Map<String, String> classMappings = new HashMap<>();
-				Map<MethodKey, String> methodMappings = new HashMap<>();
-				Map<FieldKey, String> fieldMappings = new HashMap<>();
+				Map<MemberKey, String> methodMappings = new HashMap<>();
+				Map<UnpickV2Remapper.FieldKey, String> fieldMappings = new HashMap<>();
 
 				MemoryMappingTree mappingTree = new MemoryMappingTree();
 				MappingReader.read(mappings.toPath(), mappingTree);
@@ -219,11 +269,11 @@ public interface UnpickDefinitions {
 					classMappings.put(className, cls.getName(dstNs));
 
 					for (MappingTree.MethodMapping mtd : cls.getMethods()) {
-						methodMappings.put(new MethodKey(className, mtd.getName(srcNs), mtd.getDesc(srcNs)), mtd.getName(dstNs));
+						methodMappings.put(new MemberKey(className, mtd.getName(srcNs), mtd.getDesc(srcNs)), mtd.getName(dstNs));
 					}
 
 					for (MappingTree.FieldMapping fld : cls.getFields()) {
-						fieldMappings.put(new FieldKey(className, fld.getName(srcNs)), fld.getName(dstNs));
+						fieldMappings.put(new UnpickV2Remapper.FieldKey(className, fld.getName(srcNs)), fld.getName(dstNs));
 					}
 				}
 
