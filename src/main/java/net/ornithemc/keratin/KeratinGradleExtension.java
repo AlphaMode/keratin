@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import net.ornithemc.keratin.api.task.unpick.UnpickVersion;
 import org.apache.commons.io.FileUtils;
 
 import org.gradle.api.Action;
@@ -155,6 +156,8 @@ public class KeratinGradleExtension implements KeratinGradleExtensionAPI {
 	private final ListProperty<String> minecraftVersions;
 	private final Property<Integer> intermediaryGen;
 
+    private final Property<UnpickVersion> unpickVersions;
+
 	private final Versioned<String, MinecraftVersion> minecraftVersionsById;
 	private final Versioned<String, VersionInfo> versionInfos;
 	private final Versioned<String, VersionDetails> versionDetails;
@@ -196,6 +199,10 @@ public class KeratinGradleExtension implements KeratinGradleExtensionAPI {
 		this.intermediaryGen = this.project.getObjects().property(Integer.class);
 		this.intermediaryGen.convention(1);
 		this.intermediaryGen.finalizeValueOnRead();
+
+        this.unpickVersions = this.project.getObjects().property(UnpickVersion.class);
+        this.unpickVersions.convention(UnpickVersion.V2);
+        this.unpickVersions.finalizeValueOnRead();
 
 		this.minecraftVersionsById = new Versioned<>(minecraftVersionId -> {
 			return MinecraftVersion.parse(this, minecraftVersionId);
@@ -309,12 +316,22 @@ public class KeratinGradleExtension implements KeratinGradleExtensionAPI {
 		}
 	}
 
-	@Override
+    @Override
 	public Property<Integer> getIntermediaryGen() {
 		return intermediaryGen;
 	}
 
-	private void findMinecraftVersions(TaskSelection selection, Set<MinecraftVersion> minecraftVersions) throws IOException {
+    @Override
+    public void unpickVersion(int version) {
+        this.unpickVersions.set(UnpickVersion.getVersion(version));
+    }
+
+    @Override
+    public Property<UnpickVersion> getUnpickVersion() {
+        return unpickVersions;
+    }
+
+    private void findMinecraftVersions(TaskSelection selection, Set<MinecraftVersion> minecraftVersions) throws IOException {
 		if (selection == TaskSelection.INTERMEDIARY) {
 			File dir = files.getIntermediaryDevelopmentFiles().getMappingsDirectory();
 

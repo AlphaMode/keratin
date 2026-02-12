@@ -35,18 +35,19 @@ public interface UnpickDefinitions {
 	default void collectUnpickDefinitions(KeratinGradleExtension keratin, MinecraftVersion[] minecraftVersions, File dir, File[] files) throws Exception {
 		BufferedWriter[] writers = new BufferedWriter[minecraftVersions.length];
 
-        // TODO: do remapping from v2 to v4 somewhere here?
+        UnpickVersion unpickVersion = keratin.getUnpickVersion().get();
+
 		try {
 			for (int i = 0; i < minecraftVersions.length; i++) {
 				writers[i] = new BufferedWriter(new FileWriter(files[i]));
 
 				// headers from src files are skipped
 				// (we don't want headers in the middle of the file)
-				writers[i].write("unpick v4");
+				writers[i].write(unpickVersion.getHeader());
 				writers[i].newLine();
 			}
 
-			collectUnpickDefinitions(keratin, minecraftVersions, dir, writers);
+			collectUnpickDefinitions(keratin, unpickVersion, minecraftVersions, dir, writers);
 		} finally {
 			for (BufferedWriter writer : writers) {
 				if (writer != null) {
@@ -60,27 +61,32 @@ public interface UnpickDefinitions {
 		}
 	}
 
-	private static void collectUnpickDefinitions(KeratinGradleExtension keratin, MinecraftVersion[] minecraftVersions, File dir, BufferedWriter[] writers) throws Exception {
+	private static void collectUnpickDefinitions(KeratinGradleExtension keratin, UnpickVersion projectUnpickVersion, MinecraftVersion[] minecraftVersions, File dir, BufferedWriter[] writers) throws Exception {
 		for (File file : dir.listFiles()) {
 			if (file.isFile() && file.getName().endsWith(FILE_EXTENSION)) {
-				exportUnpickDefinitions(keratin, minecraftVersions, file, writers);
+				exportUnpickDefinitions(keratin, projectUnpickVersion, minecraftVersions, file, writers);
 			}
 			if (file.isDirectory()) {
-				collectUnpickDefinitions(keratin, minecraftVersions, file, writers);
+				collectUnpickDefinitions(keratin, projectUnpickVersion, minecraftVersions, file, writers);
 			}
 		}
 	}
 
-	private static void exportUnpickDefinitions(KeratinGradleExtension keratin, MinecraftVersion[] minecraftVersions, File file, BufferedWriter[] writers) throws Exception {
+	private static void exportUnpickDefinitions(KeratinGradleExtension keratin, UnpickVersion projectUnpickVersion, MinecraftVersion[] minecraftVersions, File file, BufferedWriter[] writers) throws Exception {
 		try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
-			String line = reader.readLine(); // skip header
+			String line = reader.readLine();
+            UnpickVersion unpickVersion = UnpickVersion.parse(line);
 
-			switch (line) {
-                case "v1", "v2": {
+            if (unpickVersion != projectUnpickVersion) {
+                throw new RuntimeException("Unpick version in file " + file + " uses " + unpickVersion + " while project excepts " + projectUnpickVersion);
+            }
+
+			switch (unpickVersion) {
+                case V1, V2: {
                     exportV2UnpickDefinitions(reader, keratin, minecraftVersions, writers);
                     break;
                 }
-                case "unpick v2", "unpick v4": {
+                case V3, V4: {
                     exportV3UnpickDefinitions(reader, keratin, minecraftVersions, writers);
                     break;
                 }
@@ -201,9 +207,10 @@ public interface UnpickDefinitions {
         LineNumberReader lineReader = new LineNumberReader(inputStreamReader);
         String version = lineReader.readLine();
         inputStreamReader.reset();
+        UnpickVersion unpickVersion = UnpickVersion.parse(version);
 
-        switch (version) {
-            case "v1", "v2": {
+        switch (unpickVersion) {
+            case V1, V2: {
                 try (UnpickV2Reader reader = new UnpickV2Reader(inputStreamReader)) {
                     UnpickV2Writer writer = new UnpickV2Writer();
                     reader.accept(new UnpickV2Remapper(mappings, Collections.emptyMap(), Collections.emptyMap(), writer));
@@ -211,7 +218,7 @@ public interface UnpickDefinitions {
                 }
                 break;
             }
-            case "unpick v3", "unpick v4": {
+            case V3, V4: {
                 try (UnpickV3Reader reader = new UnpickV3Reader(inputStreamReader)) {
                     UnpickV3Writer writer = new UnpickV3Writer();
                     reader.accept(new UnpickV3UnestingRemapper(mappings, writer));

@@ -1,5 +1,6 @@
 package net.ornithemc.keratin.api;
 
+import net.ornithemc.keratin.api.task.unpick.UnpickVersion;
 import org.gradle.api.Action;
 import org.gradle.api.provider.Property;
 
@@ -23,6 +24,10 @@ public interface KeratinGradleExtensionAPI {
 	void minecraftVersions(String... minecraftVersions);
 
 	Property<Integer> getIntermediaryGen();
+
+    void unpickVersion(int version);
+
+    Property<UnpickVersion> getUnpickVersion();
 
 	void tasks(TaskSelection selection) throws Exception;
 
