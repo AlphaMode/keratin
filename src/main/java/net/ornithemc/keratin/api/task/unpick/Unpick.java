@@ -64,14 +64,15 @@ public interface Unpick {
 
         try (
                 ZipFile inputZip = new ZipFile(input);
+                ZipFile constantsZip = new ZipFile(unpickConstants);
                 Reader mappingsReader = new BufferedReader(new FileReader(unpickDefinitions));
                 ZipOutputStream outputZip = new ZipOutputStream(new FileOutputStream(output))
         ) {
             IClassResolver classResolver = ClassResolvers.jar(inputZip);
 
-            ZipFile constants = new ZipFile(unpickConstants);
-            classpathZips.add(constants);
-            classResolver = classResolver.chain(ClassResolvers.jar(constants));
+
+            classpathZips.add(constantsZip);
+            classResolver = classResolver.chain(ClassResolvers.jar(constantsZip));
 
             for (File file : unpickClasspath) {
                 ZipFile zip = new ZipFile(file);
