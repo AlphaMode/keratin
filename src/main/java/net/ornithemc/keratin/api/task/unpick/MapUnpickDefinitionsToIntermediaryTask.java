@@ -23,6 +23,7 @@ public abstract class MapUnpickDefinitionsToIntermediaryTask extends MinecraftTa
 			parameters.getMappings().set(buildFiles.getProcessedMappingsFile(minecraftVersion));
 			parameters.getSourceNamespace().set(Mapper.NAMED);
 			parameters.getTargetNamespace().set(Mapper.INTERMEDIARY);
+            parameters.getUnpickVersion().set(keratin.getUnpickVersion());
 			parameters.getOutput().set(buildFiles.getProcessedIntermediaryUnpickDefinitionsFile(minecraftVersion));
 		});
 	}

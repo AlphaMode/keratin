@@ -70,7 +70,6 @@ public interface Unpick {
         ) {
             IClassResolver classResolver = ClassResolvers.jar(inputZip);
 
-
             classpathZips.add(constantsZip);
             classResolver = classResolver.chain(ClassResolvers.jar(constantsZip));
 

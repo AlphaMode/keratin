@@ -2,14 +2,12 @@ package net.ornithemc.keratin.api.task.unpick;
 
 import java.io.*;
 import java.nio.file.Files;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 import java.util.regex.Matcher;
 
 import daomephsta.unpick.constantmappers.datadriven.parser.MemberKey;
 import daomephsta.unpick.constantmappers.datadriven.parser.v3.UnpickV3Reader;
+import daomephsta.unpick.constantmappers.datadriven.parser.v3.UnpickV3Remapper;
 import daomephsta.unpick.constantmappers.datadriven.parser.v3.UnpickV3Writer;
 import org.gradle.api.provider.Property;
 import org.gradle.workers.WorkAction;
@@ -240,6 +238,8 @@ public interface UnpickDefinitions {
 
 		Property<String> getTargetNamespace();
 
+        Property<UnpickVersion> getUnpickVersion();
+
 		Property<File> getOutput();
 
 	}
@@ -252,6 +252,7 @@ public interface UnpickDefinitions {
 			File mappings = getParameters().getMappings().get();
 			String srcNs = getParameters().getSourceNamespace().get();
 			String dstNs = getParameters().getTargetNamespace().get();
+            UnpickVersion unpickVersion = getParameters().getUnpickVersion().get();
 			File output = getParameters().getOutput().get();
 
 			try {
@@ -259,39 +260,100 @@ public interface UnpickDefinitions {
 					return;
 				}
 
-				Map<String, String> classMappings = new HashMap<>();
-				Map<MemberKey, String> methodMappings = new HashMap<>();
-				Map<UnpickV2Remapper.FieldKey, String> fieldMappings = new HashMap<>();
-
-				MemoryMappingTree mappingTree = new MemoryMappingTree();
-				MappingReader.read(mappings.toPath(), mappingTree);
-
-				for (MappingTree.ClassMapping cls : mappingTree.getClasses()) {
-					String className = cls.getName(srcNs);
-
-					if (className == null) {
-						continue;
-					}
-
-					classMappings.put(className, cls.getName(dstNs));
-
-					for (MappingTree.MethodMapping mtd : cls.getMethods()) {
-						methodMappings.put(new MemberKey(className, mtd.getName(srcNs), mtd.getDesc(srcNs)), mtd.getName(dstNs));
-					}
-
-					for (MappingTree.FieldMapping fld : cls.getFields()) {
-						fieldMappings.put(new UnpickV2Remapper.FieldKey(className, fld.getName(srcNs)), fld.getName(dstNs));
-					}
-				}
-
-				try (UnpickV2Reader reader = new UnpickV2Reader(new FileInputStream(input))) {
-					UnpickV2Writer writer = new UnpickV2Writer();
-					reader.accept(new UnpickV2Remapper(classMappings, methodMappings, fieldMappings, writer));
-					Files.writeString(output.toPath(), writer.getOutput());
-				}
+				switch (unpickVersion) {
+                    case V1, V2 -> mapV2UnpickDefinitions(input, mappings, srcNs, dstNs, output);
+                    case V3, V4 -> mapV3UnpickDefinitions(input, mappings, srcNs, dstNs, output);
+                }
 			} catch (IOException e) {
 				throw new RuntimeException("error while remapping unpick definitions", e);
 			}
 		}
+
+        private void mapV2UnpickDefinitions(File input, File mappings, String srcNs, String dstNs, File output) throws IOException {
+            Map<String, String> classMappings = new HashMap<>();
+            Map<MemberKey, String> methodMappings = new HashMap<>();
+            Map<UnpickV2Remapper.FieldKey, String> fieldMappings = new HashMap<>();
+
+            MemoryMappingTree mappingTree = new MemoryMappingTree();
+            MappingReader.read(mappings.toPath(), mappingTree);
+
+            for (MappingTree.ClassMapping cls : mappingTree.getClasses()) {
+                String className = cls.getName(srcNs);
+
+                if (className == null) {
+                    continue;
+                }
+
+                classMappings.put(className, cls.getName(dstNs));
+
+                for (MappingTree.MethodMapping mtd : cls.getMethods()) {
+                    methodMappings.put(new MemberKey(className, mtd.getName(srcNs), mtd.getDesc(srcNs)), mtd.getName(dstNs));
+                }
+
+                for (MappingTree.FieldMapping fld : cls.getFields()) {
+                    fieldMappings.put(new UnpickV2Remapper.FieldKey(className, fld.getName(srcNs)), fld.getName(dstNs));
+                }
+            }
+
+            try (UnpickV2Reader reader = new UnpickV2Reader(new FileInputStream(input))) {
+                UnpickV2Writer writer = new UnpickV2Writer();
+                reader.accept(new UnpickV2Remapper(classMappings, methodMappings, fieldMappings, writer));
+                Files.writeString(output.toPath(), writer.getOutput());
+            }
+        }
+
+        private void mapV3UnpickDefinitions(File input, File mappings, String srcNs, String dstNs, File output) throws IOException {
+
+            MemoryMappingTree mappingTree = new MemoryMappingTree();
+            MappingReader.read(mappings.toPath(), mappingTree);
+
+            int fromM = mappingTree.getNamespaceId(srcNs);
+            int toM = mappingTree.getNamespaceId(dstNs);
+
+            try (UnpickV3Reader reader = new UnpickV3Reader(new FileReader(input))) {
+                UnpickV3Writer writer = new UnpickV3Writer();
+                reader.accept(new UnpickV3Remapper(writer) {
+                    @Override
+                    protected String mapClassName(String className) {
+                        return mappingTree.mapClassName(className.replace('.', '/'), fromM, toM).replace('/', '.');
+                    }
+
+                    @Override
+                    protected String mapFieldName(String className, String fieldName, String fieldDesc) {
+                        MappingTree.FieldMapping fieldMapping = mappingTree.getField(className.replace('.', '/'), fieldName, fieldDesc, fromM);
+
+                        if (fieldMapping == null) {
+                            return fieldName;
+                        }
+
+                        final String dstName = fieldMapping.getName(toM);
+                        return dstName == null ? fieldName : dstName;
+                    }
+
+                    @Override
+                    protected String mapMethodName(String className, String methodName, String methodDesc) {
+                        MappingTree.MethodMapping methodMapping = mappingTree.getMethod(className.replace('.', '/'), methodName, methodDesc, fromM);
+
+                        if (methodMapping == null) {
+                            return methodName;
+                        }
+
+                        final String dstName = methodMapping.getName(toM);
+                        return dstName == null ? methodName : dstName;
+                    }
+
+                    @Override
+                    protected List<String> getClassesInPackage(String pkg) {
+                        return List.of();
+                    }
+
+                    @Override
+                    protected String getFieldDesc(String className, String fieldName) {
+                        return "";
+                    }
+                });
+                Files.writeString(output.toPath(), writer.getOutput());
+            }
+        }
 	}
 }
